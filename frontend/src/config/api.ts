@@ -1,7 +1,47 @@
-import axios from "axios";
-import { useCookies } from "react-cookie";
+import axios, { AxiosError, AxiosRequestConfig } from "axios";
+import { getCookie, getExpiredDate, setLocalStorage } from "utils/setAuthorization";
 
-import React from "react";
+let isRefreshing = false;
+let subscribers: ((token: string) => void)[] = [];
+
+const subscribeTokenRefresh = (callback: (token: string) => void) => {
+  subscribers.push(callback);
+};
+
+const onRrefreshed = (token: string) => {
+  subscribers.forEach((callback) => callback(token));
+};
+
+const getRefreshToken = async (): Promise<string | void> => {
+  try {
+    const cookie = getCookie("refresh");
+    const res = await axios.get("/api/auth/refresh", {
+      headers: {
+        Authorization: `Bearer ${cookie}`,
+      },
+    });
+
+    const { accessToken, refreshToken } = res.data.data;
+
+    isRefreshing = false;
+
+    onRrefreshed(accessToken);
+    subscribers = [];
+    setLocalStorage(accessToken);
+    document.cookie = `refresh=${refreshToken}; path=/; max-age=${getExpiredDate()}`;
+
+    return accessToken;
+  } catch (err) {
+    const {
+      response: { status },
+    } = err as AxiosError;
+    if (status === 490 || status === 498) {
+      localStorage.removeItem("token");
+    }
+    isRefreshing = false;
+    subscribers = [];
+  }
+};
 
 const createInstance = () => {
   return axios.create({
@@ -14,78 +54,52 @@ const createInstance = () => {
 
 const instance = createInstance();
 
-const AxiosInterceptor = (props: Props) => {
-  const [cookie, setCookie] = useCookies(["refresh"]);
+instance.interceptors.request.use(
+  async (config) => {
+    const accessToken = JSON.parse(localStorage.getItem("token")).value;
 
-  instance.interceptors.request.use(
-    // req할 때마다 header에 access token을 던진다
-    async (config) => {
-      const newConfig = { ...config };
-      const accessToken = JSON.parse(localStorage.getItem("access")).value;
-
-      if (!accessToken) {
-        config.headers.accessToken = null;
-        return config;
-      }
-      if (config.headers && accessToken) {
-        config.headers.Authorization = `${accessToken}`;
-        return config;
-      }
-      return newConfig;
-    },
-
-    async (error) => {
-      return await Promise.reject(error);
-    },
-  );
-
-  instance.interceptors.response.use(
-    // req할 때마다 header에 access token을 던진다
-    async (config) => {
+    if (!accessToken) {
+      config.headers.accessToken = null;
       return config;
-    },
-    async (err) => {
-      const originalConfig = err.config;
+    }
+    if (config.headers && accessToken) {
+      config.headers.Authorization = accessToken;
+      return config;
+    }
+    return config;
+  },
 
-      console.log("hayoung", err);
-      if (err.response.status === 498) {
-        const { refresh } = cookie;
-        // TODO: 토큰이 만료될때마다 갱신해줌. 창현님이 api 수정하신 후에 로직 추가할 예정
-        console.log(refresh);
+  async (error: AxiosError) => {
+    return error;
+  },
+);
 
-        try {
-          const res = await axios({
-            url: "/api/auth/refresh",
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${refresh}`,
-            },
+instance.interceptors.response.use(
+  async (config) => {
+    return config;
+  },
+  async (err: AxiosError) => {
+    const { status, config: originalRequest } = err.response;
+    if (status === 401 || status === 403) {
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          subscribeTokenRefresh((token: string) => {
+            originalRequest.headers.Authorization = token;
+            resolve(axios(originalRequest));
           });
-          if (res) {
-            const { accessToken, refreshToken } = res.data.data;
-            // access - localStorage
-            localStorage.setItem("access", JSON.stringify(accessToken));
-            // refresh - cookie
-            const now = new Date();
-            const after1week = new Date();
-            after1week.setDate(now.getDate() + 7);
-            setCookie("refresh", refreshToken, { path: "/", expires: after1week });
-          }
-          return await instance.request(originalConfig);
-        } catch (err) {
-          console.log("토큰 갱신 에러");
-        }
-        return Promise.reject(err);
+        });
       }
-      return Promise.reject(err);
-    },
-  );
+      isRefreshing = true;
+      const accessToken = await getRefreshToken();
 
-  return props.children;
-};
+      if (typeof accessToken === "string") {
+        originalRequest.headers.Authorization = accessToken;
+        return axios(originalRequest);
+      }
+    }
 
-interface Props {
-  children: React.ReactElement;
-}
+    return Promise.reject(err);
+  },
+);
 
-export { AxiosInterceptor, instance };
+export { instance };

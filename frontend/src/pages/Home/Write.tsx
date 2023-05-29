@@ -10,13 +10,22 @@ import "react-draft-wysiwyg/dist/react-draft-wysiwyg.css";
 import draftjsToHtml from "draftjs-to-html";
 import { useRecoilValue } from "recoil";
 import UserState from "recoil/userAtom";
-import { teamMemberId } from "quires/team/getTeamMemberId";
+import teamMemberId from "quires/team/getTeamMemberId";
 import { setBoardWriteMutation } from "quires/board/setBoardQuery";
 
-const Write: FC = () => {
-  const [editorState, setEditorState] = useState(EditorState.createEmpty());
+import axios from "axios";
 
-  const handleImageUpload = (file: File) => {
+const Write: FC = () => {
+  const { teamId } = useParams();
+  const [editorState, setEditorState] = useState(EditorState.createEmpty());
+  const [setTeamId] = useState(() => localStorage.getItem("selectedTeamId"));
+  const [setBoardId] = useState(teamId);
+  const { data: getTeamId, isLoading: teamIdLoading } = teamMemberId(
+    Number(JSON.parse(localStorage.getItem("selectedTeamId"))),
+    Number(JSON.parse(localStorage.getItem("userId"))),
+  );
+
+  const handleImageUpload = async (file: File) => {
     const contentState = editorState.getCurrentContent();
     const contentStateWithEntity = contentState.createEntity("IMAGE", "IMMUTABLE", {
       src: file.name,
@@ -31,6 +40,10 @@ const Write: FC = () => {
     const formData = new FormData();
     formData.append("image", file);
 
+    axios
+      .post(`/api/teams/${setTeamId}/board/${setBoardId}/image`)
+      .then((res) => console.log(res))
+      .catch((err) => console.log(err));
     // fetch("https://your-image-upload-api-url", {
     //   method: "POST",
     //   body: formData,
@@ -45,30 +58,7 @@ const Write: FC = () => {
     //   });
   };
   console.log(editorState);
-  function isAllConsonant(str: string) {
-    // 자음만 포함하는 정규식
-    const regex = /^[^aeiouㄱ-ㅎㅏ-ㅣ가-힣]+$/i;
 
-    // 입력된 문자열에서 모든 문자가 자음인지 검사
-    for (let i = 0; i < str.length; i += 1) {
-      if (regex.test(str[i]) === false) {
-        return false;
-      }
-    }
-
-    // 모든 문자가 자음인 경우 true 반환
-    return true;
-  }
-
-  function isConsonant(str: string) {
-    // 입력된 문자열이 모두 자음이면 true 반환
-    if (isAllConsonant(str)) {
-      return true;
-    }
-
-    // 자음만 포함하지 않는 경우 false 반환
-    return false;
-  }
   const navi = useNavigate();
   const {
     mutate,
@@ -76,7 +66,7 @@ const Write: FC = () => {
     isError: error,
     data: writeData,
   } = setBoardWriteMutation();
-  const { teamId } = useParams();
+
   const user = useRecoilValue(UserState);
   const [title, setTitle] = useState("");
   const [boardName, setBoardName] = useState({
@@ -90,6 +80,10 @@ const Write: FC = () => {
   ];
   const [boardNum, setBoardNum] = useState(0);
   const [htmlString, setHtmlString] = useState("");
+  const { data: teamInfoId, isLoading: isGetTeamInfoLoading } = teamMemberId(
+    Number(JSON.parse(localStorage.getItem("selectedTeamId"))),
+    Number(JSON.parse(localStorage.getItem("userId"))),
+  );
 
   const updateTextDescription = async (state: any) => {
     setEditorState(state);
@@ -104,10 +98,8 @@ const Write: FC = () => {
 
     user.teamInfo.forEach((el) => {
       // teamId
-      if (el.teamId === Number(teamId)) {
-        teamMemberId(Number(teamId), memberId).then((res) => {
-          setBoardNum(res.data.data);
-        });
+      if (el.teamId === Number(teamId) && teamInfoId.data) {
+        setBoardNum(teamInfoId.data);
         return false;
       }
     });
@@ -172,9 +164,11 @@ const Write: FC = () => {
             padding: "20px",
           }}
         />
-        <div dangerouslySetInnerHTML={{ __html: htmlString }} />
+        <div className="visual-area" dangerouslySetInnerHTML={{ __html: htmlString }} />
         <hr />
-        <Button color="blue" text="제출" handler={handleSubmit} />
+        <div className="button-area">
+          <Button color="blue" text="제출" handler={handleSubmit} />
+        </div>
       </div>
     </div>
   );

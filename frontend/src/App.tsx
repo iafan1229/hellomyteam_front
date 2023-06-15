@@ -2,9 +2,8 @@ import { Suspense, lazy, useEffect, useState } from "react";
 
 import getMemberInfo from "quires/member/getMemberInfo";
 import getTeamInfo from "quires/team/getTeamInfo";
-import joinedTeamsAtom from "recoil/joinedTeams";
-import { getCookie } from "utils/setAuthorization";
-import { CookiesProvider, useCookies } from "react-cookie";
+import { getCookie, removeLocalCookie } from "utils/setAuthorization";
+import { CookiesProvider } from "react-cookie";
 
 import {
   Route,
@@ -13,7 +12,7 @@ import {
   createRoutesFromElements,
   RouterProvider,
 } from "react-router-dom";
-import { useRecoilState, useSetRecoilState } from "recoil";
+import { useRecoilState } from "recoil";
 
 import UserState from "recoil/userAtom";
 import Toast from "components/common/Toast";
@@ -48,69 +47,67 @@ const Alarm = lazy(() => import("./pages/Alarm/Alarm"));
 const MyTeam = lazy(() => import("./pages/Account/MyTeam"));
 
 const App = () => {
-  const [, , removeCookie] = useCookies(["refresh"]);
   const [useUser, setUseUser] = useRecoilState(UserState);
-  const setJoinedTeams = useSetRecoilState(joinedTeamsAtom);
   const [, setConfirmLogin] = useRecoilState(LoginState);
   const [loginBoolean, setLoginBoolean] = useState(false);
-  const { data: userInfo, refetch: userRefetch } = getMemberInfo(true);
+  const { data: userInfo, refetch: userRefetch } = getMemberInfo(loginBoolean);
   const { data: joinedTeamResponse, refetch: dataRefetch } = getTeamInfo(loginBoolean);
   const [hideNav, setHideNav] = useState<boolean>(false);
+
   useEffect(() => {
     if (localStorage.getItem("token")) {
       setConfirmLogin(true);
       setLoginBoolean(true);
-
-      if (userInfo)
-        userRefetch().then((res) => {
-          dataRefetch().then((data) => {
-            if (data.data.data === null) {
-              // 처음 가입
-              if (userInfo) {
+      if (userInfo) {
+        if (JSON.parse(localStorage?.getItem("arrayData")) !== null) {
+          setUseUser({
+            ...useUser,
+            teamInfo: [...JSON.parse(localStorage.getItem("arrayData"))],
+            selectedTeamId: [...JSON.parse(localStorage.getItem("arrayData"))][0].teamId,
+            ...userInfo.data,
+          });
+        } else {
+          userRefetch().then((res) => {
+            dataRefetch().then((data) => {
+              if (data.data?.data === null) {
+                // 처음 가입
                 setUseUser({
                   ...useUser,
                   teamInfo: [],
                   selectedTeamId: null,
                   ...userInfo.data,
                 });
+              } else {
+                // 다른 유저로 로그인시
+                setUseUser({
+                  ...useUser,
+                  teamInfo: [...data.data.data],
+                  selectedTeamId: [...data.data.data][0].teamId,
+                  ...userInfo.data,
+                });
               }
-            }
-            // 가입된 팀이 있지만 로컬스토리지를 비우고 새로고침 햇을경우
-            else {
-              setUseUser({
-                ...useUser,
-                teamInfo: [...data.data.data],
-                selectedTeamId: [...data.data.data][0].teamId,
-                ...userInfo.data,
-              });
-            }
-            localStorage.setItem("arrayData", JSON.stringify(data.data.data));
+              localStorage.setItem("arrayData", JSON.stringify(data.data.data));
+            });
           });
-        });
-    }
-    // 의존성 배열에 info가 있어야 한다.
+        }
+      }
+    } else {
+      setLoginBoolean(false);
+    } // 의존성 배열에 info가 있어야 한다.
   }, [userInfo, joinedTeamResponse]);
-  // 컴포넌트 마운트시마다 데이터 갱신
-  useEffect(() => {
-    dataRefetch().then((data) => {
-      setUseUser({
-        ...useUser,
-        teamInfo: [...data.data.data],
-        selectedTeamId: [...data.data.data][0].teamId,
-      });
-    });
-  }, []);
 
   const mainLoader = async () => {
     if (!localStorage.getItem("token") && !getCookie("refresh")) {
-      localStorage.removeItem("userId");
-      localStorage.removeItem("token");
+      removeLocalCookie();
       return redirect("/onboarding");
     }
     if (!getCookie("refresh")) {
-      localStorage.removeItem("userId");
-      localStorage.removeItem("token");
+      removeLocalCookie();
       return redirect("/onboarding/login");
+    }
+    // 다른 아이디로 로그인할 경우 로컬스토리지 비움
+    if (!localStorage.getItem("token")) {
+      removeLocalCookie();
     }
     // 새로 로그인할 경우 로컬스토리지 초기화
 
@@ -120,30 +117,10 @@ const App = () => {
     return joinedTeamResponse.data;
   };
 
-  const getUserIdLoader = () => {
-    if (!userInfo) return null;
-    return userInfo.data.id;
-  };
-
-  const getJoinedTeamListLoader = () => {
-    if (!joinedTeamResponse) return null;
-    return joinedTeamResponse.data;
-  };
-
-  // 다른 아이디로 로그인할 경우 로컬스토리지 비움
-  useEffect(() => {
-    if (!localStorage.getItem("token")) {
-      localStorage.removeItem("userId");
-      localStorage.removeItem("selectedTeamId");
-      localStorage.removeItem("arrayData");
-      removeCookie("refresh");
-    }
-  }, []);
-
   const router = createBrowserRouter(
     createRoutesFromElements(
       <Route errorElement={<NotFound />}>
-        <Route loader={mainLoader} element={<Nav hideNav={hideNav} />}>
+        <Route id="nav" loader={mainLoader} element={<Nav hideNav={hideNav} />}>
           <Route loader={mainLoader} path="/" element={<Main />}>
             <Route path="" element={<Home />} />
             <Route path="notice" element={<Notice />} />
@@ -155,7 +132,6 @@ const App = () => {
           </Route>
           <Route path="/profile/edit" element={<EditProfile />} />
           <Route
-            loader={getUserIdLoader}
             path="/search/*"
             element={
               <Suspense fallback={<LoadingSpinner />}>
@@ -173,7 +149,7 @@ const App = () => {
           />
           <Route path="/account">
             <Route path="create" element={<CreateTeam data={setHideNav} />} />
-            <Route loader={getJoinedTeamListLoader} path="" element={<MyTeam />} />
+            <Route path="" element={<MyTeam />} />
           </Route>
         </Route>
         <Route path="/onboarding" element={<Onboarding />}>
